@@ -5,7 +5,7 @@ import pandas as pd
 def init_greedy_2regret_cycle(
     ds: pd.DataFrame, dm: pd.DataFrame, start: int
 ) -> pd.Series:
-    size = int(len(ds) + 0.5)
+    size = int(len(ds) * 0.5 + 0.5)
     num_nodes = len(ds)
 
     dm = dm.copy()
