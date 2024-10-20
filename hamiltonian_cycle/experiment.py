@@ -21,6 +21,7 @@ def perform_experiment(
     mean = sum([obj_function for _, obj_function in ratings]) / len(ratings)
     maximum = sorted(ratings, key=lambda x: x[1])[-1][1]
 
-    print(best[0])
+    print(f"Best solution: {best[0]}")
+    print("Objective function statistics:")
     print(f"{minimum = }\n{mean = }\n{maximum = }")
     plot_solution(ds.loc[best[0]], title=title)
