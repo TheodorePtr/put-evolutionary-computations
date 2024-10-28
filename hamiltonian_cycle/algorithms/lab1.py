@@ -38,40 +38,34 @@ def init_nearest_neighbor_best_position(
 ) -> pd.Series:
     size = int(len(ds) * 0.5 + 0.5)
     num_nodes = len(ds)
-
-    dm = dm.copy()
-
     solution = [start]
-    remaining_nodes = set(range(num_nodes))
-    remaining_nodes.remove(start)
+    remaining_nodes = set(range(num_nodes)) - {start}
 
     while len(solution) < size:
         best_insertion_cost = float("inf")
         best_insertion = None
 
-        for node_idx in remaining_nodes:
-            node_cost = ds.loc[node_idx, "cost"]
+        for node in remaining_nodes:
+            # Find the best position for the current node without closing the path
             for i in range(len(solution) + 1):
                 if i == 0:
+                    prev_node = solution[0]
+                    insert_cost = dm[node, prev_node]
+                elif i == len(solution):
                     prev_node = solution[-1]
+                    insert_cost = dm[prev_node, node]
                 else:
                     prev_node = solution[i - 1]
-
-                if i == len(solution):
-                    next_node = solution[0]
-                else:
                     next_node = solution[i]
+                    insert_cost = (
+                        dm[prev_node, node]
+                        + dm[node, next_node]
+                        - dm[prev_node, next_node]
+                    )
 
-                insert_cost = (
-                    dm[prev_node, node_idx]
-                    + dm[node_idx, next_node]
-                    - dm[prev_node, next_node]
-                )
-
-                total_cost = insert_cost + node_cost
-                if total_cost <= best_insertion_cost:
-                    best_insertion_cost = total_cost
-                    best_insertion = (node_idx, i)
+                if insert_cost < best_insertion_cost:
+                    best_insertion_cost = insert_cost
+                    best_insertion = (node, i)
 
         solution.insert(best_insertion[1], best_insertion[0])
         remaining_nodes.remove(best_insertion[0])
