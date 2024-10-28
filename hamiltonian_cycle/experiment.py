@@ -24,4 +24,4 @@ def perform_experiment(
     print(f"Best solution: {best[0]}")
     print("Objective function statistics:")
     print(f"{minimum = }\n{mean = }\n{maximum = }")
-    plot_solution(ds.loc[best[0]], title=title)
+    plot_solution(ds, best[0], title=title)
