@@ -106,7 +106,7 @@ def init_greedy_2regret_weighted_cycle(
             regret = second_best_cost - best_cost
 
             # Weighted sum criterion (greedy + 2-regret)
-            combined_criterion = w_cost * best_cost + w_regret * regret
+            combined_criterion = w_cost * best_cost - w_regret * regret
 
             if combined_criterion < best_combined_criterion:
                 best_combined_criterion = combined_criterion
