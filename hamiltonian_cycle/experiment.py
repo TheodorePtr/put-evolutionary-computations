@@ -1,7 +1,7 @@
 import pandas as pd
 
-from hamiltonian_cycle.costs import function_cost
-from hamiltonian_cycle.plots import plot_solution
+from hamiltonian_cycle.python.costs import function_cost
+from hamiltonian_cycle.python.plots import plot_solution
 
 
 def perform_experiment(

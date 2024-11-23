@@ -1,15 +1,22 @@
 import random
+from typing import Literal
 
 import numpy as np
 import pandas as pd
 
-from hamiltonian_cycle.algorithms.lab1 import init_greedy_cycle, init_random_solution
+from hamiltonian_cycle.algorithms.lab1 import (
+    init_greedy_cycle,
+    init_random_solution,
+)
 from hamiltonian_cycle.costs import function_cost
+
+SEARCH_STRATEGY_TYPE = Literal["greedy", "steepest"]
+INTRA_SEARCH_TYPE = Literal["node", "edge"]
 
 
 def objective_change_two_nodes(dm: np.ndarray, solution: list, i: int, j: int) -> float:
     if i == j:
-        return 0.0
+        return np.inf
 
     n = len(solution)
     a, b = solution[i], solution[j]
@@ -47,7 +54,7 @@ def objective_change_two_nodes(dm: np.ndarray, solution: list, i: int, j: int) -
 
 def objective_change_two_edges(dm: np.ndarray, solution: list, i: int, j: int) -> float:
     if i >= j or (i == 0 and j == len(solution) - 1):
-        return 0.0
+        return np.inf
 
     n = len(solution)
     a_prev = solution[i - 1] if i > 0 else solution[-1]
@@ -69,6 +76,9 @@ def objective_change_inter_route(
 ) -> float:
     n = len(solution)
     node_in_solution = solution[i]
+    if node_in_solution == vacant_node:
+        return np.inf
+
     prev_node = solution[i - 1] if i > 0 else solution[-1]
     next_node = solution[(i + 1) % n]
 
@@ -127,11 +137,27 @@ def get_remaining_nodes(selected_nodes: set, num_nodes: int) -> set:
     return set(range(num_nodes)) - selected_nodes
 
 
-def browse_intra_solutions(dm: np.ndarray, solution: list, intra_search: str) -> tuple:
+def browse_intra_solutions(
+    dm: np.ndarray,
+    solution: list,
+    intra_search: str,
+    strategy: SEARCH_STRATEGY_TYPE,
+    candidate_neighbors: np.ndarray | None,
+) -> tuple:
     intra_neighbors = []
     n = len(solution)
     for i in range(n):
-        for j in range(i + 1, n):
+        if candidate_neighbors is not None:
+            inter_candidates_id = [
+                solution.index(j)
+                for j in candidate_neighbors[i]
+                if j in solution and solution.index(j) > i
+            ]
+            neighbors_to_check = inter_candidates_id
+        else:
+            neighbors_to_check = range(i + 1, n)
+
+        for j in neighbors_to_check:
             if intra_search == "node":
                 delta_nodes = objective_change_two_nodes(dm, solution, i, j)
                 if delta_nodes < 0:
@@ -140,20 +166,34 @@ def browse_intra_solutions(dm: np.ndarray, solution: list, intra_search: str) ->
                 delta_edges = objective_change_two_edges(dm, solution, i, j)
                 if delta_edges < 0:
                     intra_neighbors.append((i, j, delta_edges, "edge"))
+
+            if strategy == "greedy" and intra_neighbors:
+                return intra_neighbors
     return intra_neighbors
 
 
 def browse_inter_solutions(
-    dm: np.ndarray, solution: list, non_selected_nodes: set, costs: list
+    dm: np.ndarray,
+    solution: list,
+    non_selected_nodes: set,
+    costs: list,
+    strategy: SEARCH_STRATEGY_TYPE,
+    candidate_neighbors: np.ndarray | None,
 ) -> list:
     inter_neighbors = []
     for i in range(len(solution)):
-        for vacant_node in non_selected_nodes:
+        neighbors_to_check = non_selected_nodes
+        if candidate_neighbors is not None:
+            neighbors_to_check = neighbors_to_check.intersection(candidate_neighbors[i])
+
+        for vacant_node in neighbors_to_check:
             inter_delta = objective_change_inter_route(
                 dm, solution, i, vacant_node, costs
             )
             if inter_delta < 0:
                 inter_neighbors.append((i, vacant_node, inter_delta, "inter"))
+                if strategy == "greedy":
+                    return inter_neighbors
     return inter_neighbors
 
 
@@ -183,10 +223,16 @@ def local_search(
     ds: pd.DataFrame,
     dm: np.ndarray,
     initial_solution: list,
-    strategy: str = "greedy",
-    intra_search: str = "edge",
+    strategy: SEARCH_STRATEGY_TYPE = "greedy",
+    intra_search: INTRA_SEARCH_TYPE = "edge",
+    use_candidates_heurtistic: bool = False,
     debug_mode: bool = True,
 ) -> pd.DataFrame:
+
+    candidate_neighbors = None
+    if use_candidates_heurtistic:
+        candidate_neighbors = np.argsort(dm, axis=1)[:, 1:11]
+
     num_nodes = len(dm)
     initial_cost = function_cost(ds.loc[initial_solution])
 
@@ -195,9 +241,16 @@ def local_search(
     non_selected_nodes = get_remaining_nodes(selected_nodes, num_nodes)
 
     while True:
-        intra_neighbors = browse_intra_solutions(dm, solution, intra_search)
+        intra_neighbors = browse_intra_solutions(
+            dm, solution, intra_search, strategy, candidate_neighbors
+        )
         inter_neighbors = browse_inter_solutions(
-            dm, solution, non_selected_nodes, ds["cost"].tolist()
+            dm,
+            solution,
+            non_selected_nodes,
+            ds["cost"].tolist(),
+            strategy,
+            candidate_neighbors,
         )
 
         all_neighbors = intra_neighbors + inter_neighbors
