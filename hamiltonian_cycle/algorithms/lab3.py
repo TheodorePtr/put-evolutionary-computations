@@ -1,312 +1,415 @@
 import random
+from dataclasses import dataclass
 from typing import Literal
 
 import numpy as np
 import pandas as pd
 
-from hamiltonian_cycle.algorithms.lab1 import (
-    init_greedy_cycle,
-    init_random_solution,
-)
 from hamiltonian_cycle.costs import function_cost
 
 SEARCH_STRATEGY_TYPE = Literal["greedy", "steepest"]
-INTRA_SEARCH_TYPE = Literal["node", "edge"]
+
+INTRA_MOVE_TYPE = Literal["node", "edge"]
+MOVE_TYPE = Literal["node", "edge", "inter"]
+
+NODE_ID = int
+POSITION_IN_SOLUTION = int
 
 
-def objective_change_two_nodes(dm: np.ndarray, solution: list, i: int, j: int) -> float:
-    if i == j:
-        return np.inf
-
-    n = len(solution)
-    a, b = solution[i], solution[j]
-
-    a_prev = solution[i - 1] if i > 0 else solution[-1]
-    a_next = solution[(i + 1) % n]
-    b_prev = solution[j - 1] if j > 0 else solution[-1]
-    b_next = solution[(j + 1) % n]
-
-    # Edges to be removed and added
-    edges_removed = []
-    edges_added = []
-
-    # Remove edges connected to a and b
-    if a_prev not in (a, b):
-        edges_removed.append((a_prev, a))
-        edges_added.append((a_prev, b))
-    if a_next not in (a, b):
-        edges_removed.append((a, a_next))
-        edges_added.append((b, a_next))
-    if b_prev not in (a, b):
-        edges_removed.append((b_prev, b))
-        edges_added.append((b_prev, a))
-    if b_next not in (a, b):
-        edges_removed.append((b, b_next))
-        edges_added.append((a, b_next))
-
-    # Calculate delta
-    delta = -sum(dm[u, v] for u, v in edges_removed) + sum(
-        dm[u, v] for u, v in edges_added
-    )
-
-    return delta
+@dataclass
+class Node:
+    id: NODE_ID
+    solution_pos: POSITION_IN_SOLUTION | None = None
 
 
-def objective_change_two_edges(dm: np.ndarray, solution: list, i: int, j: int) -> float:
-    if i >= j or (i == 0 and j == len(solution) - 1):
-        return np.inf
-
-    n = len(solution)
-    a_prev = solution[i - 1] if i > 0 else solution[-1]
-    a = solution[i]
-    b = solution[j]
-    b_next = solution[(j + 1) % n]
-
-    # Edges before and after reversal
-    cost_before = dm[a_prev, a] + dm[b, b_next]
-    cost_after = dm[a_prev, b] + dm[a, b_next]
-
-    delta = cost_after - cost_before
-
-    return delta
+@dataclass
+class MoveEstimation:
+    move_type: MOVE_TYPE
+    node_a: Node
+    node_b: Node
+    delta: float
+    edges_removed: list[tuple[int, int]]  # list of edges to be removed
+    edges_added: list[tuple[int, int]]  # list of edges to be added
 
 
-def objective_change_inter_route(
-    dm: np.ndarray, solution: list, i: int, vacant_node: int, node_costs: list
-) -> float:
-    n = len(solution)
-    node_in_solution = solution[i]
-    if node_in_solution == vacant_node:
-        return np.inf
+class MoveEstimator:
+    def __init__(self, dm: np.ndarray[float, float], ds: pd.DataFrame) -> None:
+        self.dm = dm
+        self.node_costs: list[float] = ds["cost"].to_list()
 
-    prev_node = solution[i - 1] if i > 0 else solution[-1]
-    next_node = solution[(i + 1) % n]
+    def estimate_change_two_nodes_move(
+        self, solution: list[NODE_ID], node_a: Node, node_b: Node
+    ) -> MoveEstimation:
+        assert node_a.solution_pos < node_b.solution_pos
 
-    # Edge costs before and after the swap
-    edge_cost_before = dm[prev_node, node_in_solution] + dm[node_in_solution, next_node]
-    edge_cost_after = dm[prev_node, vacant_node] + dm[vacant_node, next_node]
+        a_prev_id: NODE_ID = solution[node_a.solution_pos - 1]
+        a_next_id: NODE_ID = solution[(node_a.solution_pos + 1) % len(solution)]
+        b_prev_id: NODE_ID = solution[node_b.solution_pos - 1]
+        b_next_id: NODE_ID = solution[(node_b.solution_pos + 1) % len(solution)]
 
-    # Node costs before and after the swap
-    node_cost_before = node_costs[node_in_solution]
-    node_cost_after = node_costs[vacant_node]
+        # Edges to be removed and added
+        edges_removed: list[tuple[NODE_ID, NODE_ID]] = []
+        edges_added: list[tuple[NODE_ID, NODE_ID]] = []
 
-    delta = (edge_cost_after - node_cost_after) - (edge_cost_before - node_cost_before)
+        # Remove edges connected to a and b
+        if a_prev_id not in (node_a.id, node_b.id):
+            edges_removed.append((a_prev_id, node_a.id))
+            edges_added.append((a_prev_id, node_b.id))
 
-    return delta
+        if a_next_id not in (node_a.id, node_b.id):
+            edges_removed.append((node_a.id, a_next_id))
+            edges_added.append((node_b.id, a_next_id))
+
+        if b_prev_id not in (node_a.id, node_b.id):
+            edges_removed.append((b_prev_id, node_b.id))
+            edges_added.append((b_prev_id, node_a.id))
+
+        if b_next_id not in (node_a.id, node_b.id):
+            edges_removed.append((node_b.id, b_next_id))
+            edges_added.append((node_a.id, b_next_id))
+
+        # Calculate delta
+        delta = -sum(self.dm[u, v] for u, v in edges_removed) + sum(
+            self.dm[u, v] for u, v in edges_added
+        )
+
+        return MoveEstimation(
+            move_type="node",
+            node_a=node_a,
+            node_b=node_b,
+            delta=delta,
+            edges_removed=edges_removed,
+            edges_added=edges_added,
+        )
+
+    def estimate_change_two_edges_move(
+        self, solution: list, node_a: Node, node_b: Node
+    ) -> MoveEstimation:
+
+        assert node_a.solution_pos < node_b.solution_pos
+
+        if node_a.solution_pos == 0 and node_b.solution_pos == len(solution) - 1:
+            return MoveEstimation("edge", node_a, node_b, np.inf, None, None)
+
+        a_prev_id = solution[node_a.solution_pos - 1]
+        b_next_id = solution[(node_b.solution_pos + 1) % len(solution)]
+
+        # Edges to be removed and added
+        edges_removed = [(a_prev_id, node_a.id), (node_b.id, b_next_id)]
+        edges_added = [(a_prev_id, node_b.id), (node_a.id, b_next_id)]
+
+        # Edges before and after reversal
+        cost_before = self.dm[a_prev_id, node_a.id] + self.dm[node_b.id, b_next_id]
+        cost_after = self.dm[a_prev_id, node_b.id] + self.dm[node_a.id, b_next_id]
+
+        delta = cost_after - cost_before
+
+        return MoveEstimation(
+            move_type="edge",
+            node_a=node_a,
+            node_b=node_b,
+            delta=delta,
+            edges_removed=edges_removed,
+            edges_added=edges_added,
+        )
+
+    def estimate_inter_nodes_move(
+        self,
+        solution: list[NODE_ID],
+        node_a: Node,
+        node_b: Node,
+    ) -> MoveEstimation:
+
+        assert node_a.id != node_b.id
+
+        a_prev_id = solution[node_a.solution_pos - 1]
+        a_next_id = solution[(node_a.solution_pos + 1) % len(solution)]
+
+        # Edge costs before and after the swap
+        edge_cost_before = self.dm[a_prev_id, node_a.id] + self.dm[node_a.id, a_next_id]
+        edge_cost_after = self.dm[a_prev_id, node_b.id] + self.dm[node_b.id, a_next_id]
+
+        # Node costs before and after the swap
+        node_cost_before = self.node_costs[node_a.id]
+        node_cost_after = self.node_costs[node_b.id]
+
+        # Edges to be removed and added
+        edges_removed = [(a_prev_id, node_a.id), (node_a.id, a_next_id)]
+        edges_added = [(a_prev_id, node_b.id), (node_b.id, a_next_id)]
+
+        delta = (edge_cost_after - node_cost_after) - (
+            edge_cost_before - node_cost_before
+        )
+
+        return MoveEstimation(
+            move_type="inter",
+            node_a=node_a,
+            node_b=node_b,
+            delta=delta,
+            edges_removed=edges_removed,
+            edges_added=edges_added,
+        )
 
 
-def two_nodes_exchange(solution: list, i: int, j: int) -> list:
+class LocalSearch:
+    def __init__(
+        self,
+        strategy: SEARCH_STRATEGY_TYPE,
+        intra_search: INTRA_MOVE_TYPE,
+        use_candidates_heurtistic: bool = False,
+        debug_mode: bool = True,
+    ) -> None:
+        self.strategy = strategy
+        self.intra_search = intra_search
+        self.use_candidates_heurtistic = use_candidates_heurtistic
+        self.debug_mode = debug_mode
+
+    def _shall_interupt(self, move_estimations: list[MoveEstimation]) -> bool:
+        return self.strategy == "greedy" and len(move_estimations) > 0
+
+    def _select_greedy_best_move(
+        self, all_neighbors: list[MoveEstimation]
+    ) -> MoveEstimation:
+        random.shuffle(all_neighbors)
+        return all_neighbors[0]
+
+    def browse_intra_moves(
+        self,
+        move_estimator: MoveEstimator,
+        solution: list[NODE_ID],
+    ) -> list[MoveEstimation]:
+        intra_moves: list[MoveEstimation] = []
+
+        for node_a_pos in range(len(solution)):
+
+            node_a = Node(
+                id=solution[node_a_pos],
+                solution_pos=node_a_pos,
+            )
+            node_b_positions = self._get_intra_solution_positions_to_traverse(
+                solution, node_a
+            )
+
+            for node_b_pos in node_b_positions:
+                node_b = Node(id=solution[node_b_pos], solution_pos=node_b_pos)
+                if self.intra_search == "node":
+                    move_estimation = move_estimator.estimate_change_two_nodes_move(
+                        solution, node_a, node_b
+                    )
+                elif self.intra_search == "edge":
+                    move_estimation = move_estimator.estimate_change_two_nodes_move(
+                        solution, node_a, node_b
+                    )
+
+                if move_estimation.delta < 0:
+                    intra_moves.append(move_estimation)
+
+                if self._shall_interupt(intra_moves):
+                    return intra_moves
+
+        return intra_moves
+
+    def _get_intra_solution_positions_to_traverse(
+        self, solution: list[NODE_ID], node_a: Node
+    ) -> list[POSITION_IN_SOLUTION]:
+
+        if self.use_candidates_heurtistic:
+            positions_to_traverse = []
+            for candidate_id in self.candidate_node_ids_per_node[node_a.id]:
+                if (
+                    candidate_id in solution
+                    and solution.index(candidate_id) > node_a.solution_pos
+                ):
+                    positions_to_traverse.append(solution.index(candidate_id))
+        else:
+            positions_to_traverse = range(node_a.solution_pos + 1, len(solution))
+        return positions_to_traverse
+
+    def browse_inter_moves(
+        self,
+        move_estimator: MoveEstimator,
+        solution: list[NODE_ID],
+        non_selected_nodes: set[NODE_ID],
+    ) -> list[MoveEstimation]:
+        inter_neighbors: list[MoveEstimation] = []
+
+        for node_a_pos in range(len(solution)):
+            node_a = Node(
+                id=solution[node_a_pos],
+                solution_pos=node_a_pos,
+            )
+
+            vacant_node_ids = self._get_inter_solution_ids_to_traverse(
+                non_selected_nodes, node_a_pos
+            )
+
+            for node_b_id in vacant_node_ids:
+                node_b = Node(id=node_b_id)
+
+                move_estimation = move_estimator.estimate_inter_nodes_move(
+                    solution,
+                    node_a,
+                    node_b,
+                )
+                if move_estimation.delta < 0:
+                    inter_neighbors.append(move_estimation)
+                if self._shall_interupt(inter_neighbors):
+                    return inter_neighbors
+        return inter_neighbors
+
+    def _get_inter_solution_ids_to_traverse(
+        self, non_selected_nodes: set[NODE_ID], node_a_pos: POSITION_IN_SOLUTION
+    ) -> set[NODE_ID]:
+        neighbors_to_check = non_selected_nodes.copy()
+        if self.use_candidates_heurtistic:
+            neighbors_to_check = neighbors_to_check.intersection(
+                self.candidate_node_ids_per_node[node_a_pos]
+            )
+
+        return neighbors_to_check
+
+    def update_solution(
+        self,
+        solution: list[NODE_ID],
+        selected_move: MoveEstimation,
+        selected_nodes: set[NODE_ID],
+        non_selected_nodes: set[NODE_ID],
+    ) -> tuple:
+
+        if selected_move.move_type == "node":
+            solution = two_nodes_exchange(
+                solution, selected_move.node_a, selected_move.node_b
+            )
+        elif selected_move.move_type == "edge":
+            solution = two_edges_exchange(
+                solution, selected_move.node_a, selected_move.node_b
+            )
+        elif selected_move.move_type == "inter":
+            solution, selected_nodes, non_selected_nodes = inter_route_swap(
+                solution,
+                selected_move.node_a,
+                selected_move.node_b,
+                selected_nodes,
+                non_selected_nodes,
+            )
+        return solution, selected_nodes, non_selected_nodes
+
+    def _store_candidate_node_ids(self, dm: np.ndarray[float, float]) -> None:
+        self.candidate_node_ids_per_node: np.ndarray[NODE_ID, NODE_ID] = np.argsort(
+            dm, axis=1
+        )[:, 1:11]
+
+    def __call__(
+        self,
+        ds: pd.DataFrame,
+        dm: np.ndarray[float, float],
+        initial_solution: list[NODE_ID],
+    ) -> pd.DataFrame:
+
+        if self.use_candidates_heurtistic:
+            self._store_candidate_node_ids(dm)
+
+        solution = initial_solution.copy()
+        selected_nodes: set[NODE_ID] = set(initial_solution)
+        non_selected_nodes: set[NODE_ID] = get_remaining_nodes(selected_nodes, len(dm))
+
+        move_estimator = MoveEstimator(dm, ds)
+
+        while True:
+            intra_moves = self.browse_intra_moves(move_estimator, solution)
+            inter_moves = self.browse_inter_moves(
+                move_estimator, solution, non_selected_nodes
+            )
+
+            all_moves = intra_moves + inter_moves
+
+            # no improvment found
+            if not all_moves:
+                break
+
+            if self.strategy == "greedy":
+                selected_move = self._select_greedy_best_move(all_moves)
+            elif self.strategy == "steepest":
+                selected_move = min(all_moves, key=lambda move: move.delta)
+
+            # Save the old solution for debugging
+            if self.debug_mode:
+                old_solution = solution.copy()
+
+            # Update solution and cost
+            solution, selected_nodes, non_selected_nodes = self.update_solution(
+                solution, selected_move, selected_nodes, non_selected_nodes
+            )
+            if self.debug_mode:
+                # Calculate real improvement
+                self._perform_debug_assertions(
+                    ds, solution, selected_move, old_solution
+                )
+
+        return ds.loc[solution]
+
+    def _perform_debug_assertions(self, ds, solution, selected_move, old_solution):
+        real_improvement = function_cost(ds.loc[old_solution]) - function_cost(
+            ds.loc[solution]
+        )
+
+        if real_improvement != -selected_move.delta:
+            print(f"Promised improvement: {selected_move.delta[2]}")
+            print(f"Real improvement: {real_improvement}")
+            print(f"Operation: {selected_move.move_type}")
+            print("===========")
+
+        assert function_cost(ds.loc[solution]) < function_cost(ds.loc[old_solution])
+
+
+def get_remaining_nodes(selected_nodes: set[NODE_ID], num_nodes: int) -> set[NODE_ID]:
+    return set(range(num_nodes)) - selected_nodes
+
+
+def two_nodes_exchange(
+    solution: list[NODE_ID], node_a: Node, node_b: Node
+) -> list[NODE_ID]:
     new_solution = solution.copy()
-    new_solution[i], new_solution[j] = new_solution[j], new_solution[i]
+
+    (
+        new_solution[node_a.solution_pos],
+        new_solution[node_b.solution_pos],
+    ) = (
+        new_solution[node_b.solution_pos],
+        new_solution[node_a.solution_pos],
+    )
     return new_solution
 
 
-def two_edges_exchange(solution: list, i: int, j: int) -> list:
-    if i >= j:
-        return solution.copy()  # No change if i >= j
-
+def two_edges_exchange(
+    solution: list[NODE_ID], node_a: Node, node_b: Node
+) -> list[NODE_ID]:
     new_solution = solution.copy()
-    new_solution[i : j + 1] = new_solution[i : j + 1][::-1]
+
+    new_solution[node_a.solution_pos : node_b.solution_pos + 1] = new_solution[
+        node_a.solution_pos : node_b.solution_pos + 1
+    ][::-1]
     return new_solution
 
 
 def inter_route_swap(
-    solution: list,
-    i: int,
-    vacant_node: int,
-    selected_nodes: set,
-    non_selected_nodes: set,
-) -> tuple:
+    solution: list[NODE_ID],
+    node_a: Node,
+    node_b: Node,
+    selected_nodes: set[NODE_ID],
+    non_selected_nodes: set[NODE_ID],
+) -> tuple[list[NODE_ID], set[NODE_ID], set[NODE_ID]]:
     new_solution = solution.copy()
-    node_in_solution = new_solution[i]
-    new_solution[i] = vacant_node
+
+    new_solution[node_a.solution_pos] = node_b.id
 
     # Update the node sets
     selected_nodes = selected_nodes.copy()
     non_selected_nodes = non_selected_nodes.copy()
 
-    selected_nodes.remove(node_in_solution)
-    selected_nodes.add(vacant_node)
-    non_selected_nodes.remove(vacant_node)
-    non_selected_nodes.add(node_in_solution)
+    selected_nodes.remove(node_a.id)
+    selected_nodes.add(node_b.id)
+    non_selected_nodes.remove(node_b.id)
+    non_selected_nodes.add(node_a.id)
 
     return new_solution, selected_nodes, non_selected_nodes
-
-
-def get_remaining_nodes(selected_nodes: set, num_nodes: int) -> set:
-    return set(range(num_nodes)) - selected_nodes
-
-
-def browse_intra_solutions(
-    dm: np.ndarray,
-    solution: list,
-    intra_search: str,
-    strategy: SEARCH_STRATEGY_TYPE,
-    candidate_neighbors: np.ndarray | None,
-) -> tuple:
-    intra_neighbors = []
-    n = len(solution)
-    for i in range(n):
-        if candidate_neighbors is not None:
-            inter_candidates_id = [
-                solution.index(j)
-                for j in candidate_neighbors[i]
-                if j in solution and solution.index(j) > i
-            ]
-            neighbors_to_check = inter_candidates_id
-        else:
-            neighbors_to_check = range(i + 1, n)
-
-        for j in neighbors_to_check:
-            if intra_search == "node":
-                delta_nodes = objective_change_two_nodes(dm, solution, i, j)
-                if delta_nodes < 0:
-                    intra_neighbors.append((i, j, delta_nodes, "node"))
-            elif intra_search == "edge":
-                delta_edges = objective_change_two_edges(dm, solution, i, j)
-                if delta_edges < 0:
-                    intra_neighbors.append((i, j, delta_edges, "edge"))
-
-            if strategy == "greedy" and intra_neighbors:
-                return intra_neighbors
-    return intra_neighbors
-
-
-def browse_inter_solutions(
-    dm: np.ndarray,
-    solution: list,
-    non_selected_nodes: set,
-    costs: list,
-    strategy: SEARCH_STRATEGY_TYPE,
-    candidate_neighbors: np.ndarray | None,
-) -> list:
-    inter_neighbors = []
-    for i in range(len(solution)):
-        neighbors_to_check = non_selected_nodes
-        if candidate_neighbors is not None:
-            neighbors_to_check = neighbors_to_check.intersection(candidate_neighbors[i])
-
-        for vacant_node in neighbors_to_check:
-            inter_delta = objective_change_inter_route(
-                dm, solution, i, vacant_node, costs
-            )
-            if inter_delta < 0:
-                inter_neighbors.append((i, vacant_node, inter_delta, "inter"))
-                if strategy == "greedy":
-                    return inter_neighbors
-    return inter_neighbors
-
-
-def update_solution(
-    solution: list,
-    best_neighbor: tuple,
-    selected_nodes: set,
-    non_selected_nodes: set,
-) -> tuple:
-    neighbor_type = best_neighbor[-1]
-
-    if neighbor_type == "node":
-        i, j = best_neighbor[:2]
-        solution = two_nodes_exchange(solution, int(i), int(j))
-    elif neighbor_type == "edge":
-        i, j = best_neighbor[:2]
-        solution = two_edges_exchange(solution, int(i), int(j))
-    elif neighbor_type == "inter":
-        i, vacant_node = best_neighbor[:2]
-        solution, selected_nodes, non_selected_nodes = inter_route_swap(
-            solution, int(i), int(vacant_node), selected_nodes, non_selected_nodes
-        )
-    return solution, selected_nodes, non_selected_nodes
-
-
-def local_search(
-    ds: pd.DataFrame,
-    dm: np.ndarray,
-    initial_solution: list,
-    strategy: SEARCH_STRATEGY_TYPE = "greedy",
-    intra_search: INTRA_SEARCH_TYPE = "edge",
-    use_candidates_heurtistic: bool = False,
-    debug_mode: bool = True,
-) -> pd.DataFrame:
-
-    candidate_neighbors = None
-    if use_candidates_heurtistic:
-        candidate_neighbors = np.argsort(dm, axis=1)[:, 1:11]
-
-    num_nodes = len(dm)
-    initial_cost = function_cost(ds.loc[initial_solution])
-
-    solution = initial_solution.copy()
-    selected_nodes = set(initial_solution)
-    non_selected_nodes = get_remaining_nodes(selected_nodes, num_nodes)
-
-    while True:
-        intra_neighbors = browse_intra_solutions(
-            dm, solution, intra_search, strategy, candidate_neighbors
-        )
-        inter_neighbors = browse_inter_solutions(
-            dm,
-            solution,
-            non_selected_nodes,
-            ds["cost"].tolist(),
-            strategy,
-            candidate_neighbors,
-        )
-
-        all_neighbors = intra_neighbors + inter_neighbors
-
-        if not all_neighbors:
-            # No improvement found
-            break
-
-        if strategy == "greedy":
-            random.shuffle(all_neighbors)
-            best_neighbor = next((n for n in all_neighbors if n[2] < 0), None)
-        elif strategy == "steepest":
-            best_neighbor = min(all_neighbors, key=lambda x: x[2])
-
-        if best_neighbor is None:
-            # No improving neighbor found
-            break
-
-        # Save the old solution for debugging
-        old_solution = solution.copy()
-
-        # Update solution and cost
-        solution, selected_nodes, non_selected_nodes = update_solution(
-            solution, best_neighbor, selected_nodes, non_selected_nodes
-        )
-        initial_cost += best_neighbor[2]
-
-        if debug_mode:
-            # Calculate real improvement
-            real_improvement = function_cost(ds.loc[old_solution]) - function_cost(
-                ds.loc[solution]
-            )
-
-            if real_improvement != -best_neighbor[2]:
-                print(f"Promised improvement: {best_neighbor[2]}")
-                print(f"Real improvement: {real_improvement}")
-                print(f"Operation: {best_neighbor[-1]}")
-                print("===========")
-
-            assert function_cost(ds.loc[solution]) < function_cost(ds.loc[old_solution])
-
-    return ds.loc[solution]
-
-
-def init_local_search(
-    ds: pd.DataFrame,
-    dm: np.ndarray,
-    start: int,
-    strategy: str,
-    intra_search: str,
-    debug_mode: bool = True,
-    algo_to_enchance: str = "greedy_cycle",
-) -> pd.DataFrame:
-    if algo_to_enchance == "greedy_cycle":
-        solution = list(init_greedy_cycle(ds, dm, start).index)
-    elif algo_to_enchance == "random":
-        solution = list(init_random_solution(ds, dm, start).index)
-    solution = local_search(ds, dm, solution, strategy, intra_search, debug_mode)
-    return solution
