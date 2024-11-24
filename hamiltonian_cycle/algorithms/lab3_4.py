@@ -160,21 +160,15 @@ class LocalSearch:
         strategy: SEARCH_STRATEGY_TYPE,
         intra_search: INTRA_MOVE_TYPE,
         use_candidates_heurtistic: bool = False,
-        reuse_moves: bool = False,
         debug_mode: bool = True,
     ) -> None:
         self.strategy = strategy
         self.intra_search = intra_search
         self.use_candidates_heurtistic = use_candidates_heurtistic
-        self.reuse_moves = reuse_moves
         self.debug_mode = debug_mode
 
     def _shall_interupt(self, move_estimations: list[MoveEstimation]) -> bool:
-        return (
-            self.strategy == "greedy"
-            and len(move_estimations) > 0
-            and not self.reuse_moves
-        )
+        return self.strategy == "greedy" and len(move_estimations) > 0
 
     def _select_greedy_best_move(
         self, all_neighbors: set[MoveEstimation]
@@ -324,18 +318,13 @@ class LocalSearch:
 
         move_estimator = MoveEstimator(dm, ds)
 
-        shall_browse_all = True
         while True:
-            if shall_browse_all:
-                intra_moves = self._browse_intra_moves(move_estimator, solution)
-                inter_moves = self._browse_inter_moves(
-                    move_estimator, solution, non_selected_nodes
-                )
+            intra_moves = self._browse_intra_moves(move_estimator, solution)
+            inter_moves = self._browse_inter_moves(
+                move_estimator, solution, non_selected_nodes
+            )
 
-                all_moves = intra_moves.union(inter_moves)
-
-                if self.reuse_moves:
-                    shall_browse_all = False
+            all_moves = intra_moves.union(inter_moves)
 
             # no improvment found
             if not all_moves:
@@ -358,30 +347,12 @@ class LocalSearch:
             if self.debug_mode:
                 self._check_debug_assertions(ds, solution, selected_move, old_solution)
 
-            if self.reuse_moves:
-                all_moves = self._recalculate_moves(
-                    all_moves,
-                    solution,
-                    selected_move,
-                    selected_nodes,
-                    non_selected_nodes,
-                )
-
         return ds.loc[solution]
 
     def _invert_nodes_order(
         edges: list[tuple[NODE_ID, NODE_ID]]
     ) -> list[tuple[NODE_ID, NODE_ID]]:
         return [(v, u) for u, v in edges]
-
-    def _recalculate_moves(
-        self,
-        all_moves: list[MoveEstimation],
-        solution: list[NODE_ID],
-        selected_move: MoveEstimation,
-        selected_nodes: set[NODE_ID],
-        non_selected_nodes: set[NODE_ID],
-    ) -> set[MoveEstimation]: ...
 
     def _check_debug_assertions(self, ds, solution, selected_move, old_solution):
         real_improvement = function_cost(ds.loc[old_solution]) - function_cost(
