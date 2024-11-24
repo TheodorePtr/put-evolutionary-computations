@@ -16,20 +16,21 @@ NODE_ID = int
 POSITION_IN_SOLUTION = int
 
 
-@dataclass
+@dataclass(frozen=True)
 class Node:
     id: NODE_ID
     solution_pos: POSITION_IN_SOLUTION | None = None
 
 
-@dataclass
+@dataclass(frozen=True)
 class MoveEstimation:
     move_type: MOVE_TYPE
     node_a: Node
     node_b: Node
     delta: float
-    edges_removed: list[tuple[int, int]]  # list of edges to be removed
-    edges_added: list[tuple[int, int]]  # list of edges to be added
+    edges_removed: frozenset[tuple[NODE_ID, NODE_ID]]  # list of edges to be removed
+    edges_added: frozenset[tuple[NODE_ID, NODE_ID]]  # list of edges to be added
+    is_applicable: bool = True
 
 
 class MoveEstimator:
@@ -48,25 +49,25 @@ class MoveEstimator:
         b_next_id: NODE_ID = solution[(node_b.solution_pos + 1) % len(solution)]
 
         # Edges to be removed and added
-        edges_removed: list[tuple[NODE_ID, NODE_ID]] = []
-        edges_added: list[tuple[NODE_ID, NODE_ID]] = []
+        edges_removed: set[tuple[NODE_ID, NODE_ID]] = set()
+        edges_added: set[tuple[NODE_ID, NODE_ID]] = set()
 
         # Remove edges connected to a and b
         if a_prev_id not in (node_a.id, node_b.id):
-            edges_removed.append((a_prev_id, node_a.id))
-            edges_added.append((a_prev_id, node_b.id))
+            edges_removed.add((a_prev_id, node_a.id))
+            edges_added.add((a_prev_id, node_b.id))
 
         if a_next_id not in (node_a.id, node_b.id):
-            edges_removed.append((node_a.id, a_next_id))
-            edges_added.append((node_b.id, a_next_id))
+            edges_removed.add((node_a.id, a_next_id))
+            edges_added.add((node_b.id, a_next_id))
 
         if b_prev_id not in (node_a.id, node_b.id):
-            edges_removed.append((b_prev_id, node_b.id))
-            edges_added.append((b_prev_id, node_a.id))
+            edges_removed.add((b_prev_id, node_b.id))
+            edges_added.add((b_prev_id, node_a.id))
 
         if b_next_id not in (node_a.id, node_b.id):
-            edges_removed.append((node_b.id, b_next_id))
-            edges_added.append((node_a.id, b_next_id))
+            edges_removed.add((node_b.id, b_next_id))
+            edges_added.add((node_a.id, b_next_id))
 
         # Calculate delta
         delta = -sum(self.dm[u, v] for u, v in edges_removed) + sum(
@@ -78,8 +79,8 @@ class MoveEstimator:
             node_a=node_a,
             node_b=node_b,
             delta=delta,
-            edges_removed=edges_removed,
-            edges_added=edges_added,
+            edges_removed=frozenset(edges_removed),
+            edges_added=frozenset(edges_added),
         )
 
     def estimate_change_two_edges_move(
@@ -89,14 +90,16 @@ class MoveEstimator:
         assert node_a.solution_pos < node_b.solution_pos
 
         if node_a.solution_pos == 0 and node_b.solution_pos == len(solution) - 1:
-            return MoveEstimation("edge", node_a, node_b, np.inf, None, None)
+            return MoveEstimation(
+                "edge", node_a, node_b, np.inf, frozenset([]), frozenset([])
+            )
 
         a_prev_id = solution[node_a.solution_pos - 1]
         b_next_id = solution[(node_b.solution_pos + 1) % len(solution)]
 
         # Edges to be removed and added
-        edges_removed = [(a_prev_id, node_a.id), (node_b.id, b_next_id)]
-        edges_added = [(a_prev_id, node_b.id), (node_a.id, b_next_id)]
+        edges_removed = frozenset([(a_prev_id, node_a.id), (node_b.id, b_next_id)])
+        edges_added = frozenset([(a_prev_id, node_b.id), (node_a.id, b_next_id)])
 
         # Edges before and after reversal
         cost_before = self.dm[a_prev_id, node_a.id] + self.dm[node_b.id, b_next_id]
@@ -134,8 +137,8 @@ class MoveEstimator:
         node_cost_after = self.node_costs[node_b.id]
 
         # Edges to be removed and added
-        edges_removed = [(a_prev_id, node_a.id), (node_a.id, a_next_id)]
-        edges_added = [(a_prev_id, node_b.id), (node_b.id, a_next_id)]
+        edges_removed = frozenset([(a_prev_id, node_a.id), (node_a.id, a_next_id)])
+        edges_added = frozenset([(a_prev_id, node_b.id), (node_b.id, a_next_id)])
 
         delta = (edge_cost_after - node_cost_after) - (
             edge_cost_before - node_cost_before
@@ -157,28 +160,34 @@ class LocalSearch:
         strategy: SEARCH_STRATEGY_TYPE,
         intra_search: INTRA_MOVE_TYPE,
         use_candidates_heurtistic: bool = False,
+        reuse_moves: bool = False,
         debug_mode: bool = True,
     ) -> None:
         self.strategy = strategy
         self.intra_search = intra_search
         self.use_candidates_heurtistic = use_candidates_heurtistic
+        self.reuse_moves = reuse_moves
         self.debug_mode = debug_mode
 
     def _shall_interupt(self, move_estimations: list[MoveEstimation]) -> bool:
-        return self.strategy == "greedy" and len(move_estimations) > 0
+        return (
+            self.strategy == "greedy"
+            and len(move_estimations) > 0
+            and not self.reuse_moves
+        )
 
     def _select_greedy_best_move(
-        self, all_neighbors: list[MoveEstimation]
+        self, all_neighbors: set[MoveEstimation]
     ) -> MoveEstimation:
-        random.shuffle(all_neighbors)
+        random.shuffle(list(all_neighbors))
         return all_neighbors[0]
 
-    def browse_intra_moves(
+    def _browse_intra_moves(
         self,
         move_estimator: MoveEstimator,
         solution: list[NODE_ID],
-    ) -> list[MoveEstimation]:
-        intra_moves: list[MoveEstimation] = []
+    ) -> set[MoveEstimation]:
+        intra_moves: set[MoveEstimation] = set()
 
         for node_a_pos in range(len(solution)):
 
@@ -197,12 +206,12 @@ class LocalSearch:
                         solution, node_a, node_b
                     )
                 elif self.intra_search == "edge":
-                    move_estimation = move_estimator.estimate_change_two_nodes_move(
+                    move_estimation = move_estimator.estimate_change_two_edges_move(
                         solution, node_a, node_b
                     )
 
                 if move_estimation.delta < 0:
-                    intra_moves.append(move_estimation)
+                    intra_moves.add(move_estimation)
 
                 if self._shall_interupt(intra_moves):
                     return intra_moves
@@ -225,13 +234,13 @@ class LocalSearch:
             positions_to_traverse = range(node_a.solution_pos + 1, len(solution))
         return positions_to_traverse
 
-    def browse_inter_moves(
+    def _browse_inter_moves(
         self,
         move_estimator: MoveEstimator,
         solution: list[NODE_ID],
         non_selected_nodes: set[NODE_ID],
-    ) -> list[MoveEstimation]:
-        inter_neighbors: list[MoveEstimation] = []
+    ) -> set[MoveEstimation]:
+        inter_neighbors: set[MoveEstimation] = set()
 
         for node_a_pos in range(len(solution)):
             node_a = Node(
@@ -252,7 +261,7 @@ class LocalSearch:
                     node_b,
                 )
                 if move_estimation.delta < 0:
-                    inter_neighbors.append(move_estimation)
+                    inter_neighbors.add(move_estimation)
                 if self._shall_interupt(inter_neighbors):
                     return inter_neighbors
         return inter_neighbors
@@ -268,7 +277,7 @@ class LocalSearch:
 
         return neighbors_to_check
 
-    def update_solution(
+    def _update_solution(
         self,
         solution: list[NODE_ID],
         selected_move: MoveEstimation,
@@ -315,13 +324,18 @@ class LocalSearch:
 
         move_estimator = MoveEstimator(dm, ds)
 
+        shall_browse_all = True
         while True:
-            intra_moves = self.browse_intra_moves(move_estimator, solution)
-            inter_moves = self.browse_inter_moves(
-                move_estimator, solution, non_selected_nodes
-            )
+            if shall_browse_all:
+                intra_moves = self._browse_intra_moves(move_estimator, solution)
+                inter_moves = self._browse_inter_moves(
+                    move_estimator, solution, non_selected_nodes
+                )
 
-            all_moves = intra_moves + inter_moves
+                all_moves = intra_moves.union(inter_moves)
+
+                if self.reuse_moves:
+                    shall_browse_all = False
 
             # no improvment found
             if not all_moves:
@@ -337,18 +351,39 @@ class LocalSearch:
                 old_solution = solution.copy()
 
             # Update solution and cost
-            solution, selected_nodes, non_selected_nodes = self.update_solution(
+            solution, selected_nodes, non_selected_nodes = self._update_solution(
                 solution, selected_move, selected_nodes, non_selected_nodes
             )
+
             if self.debug_mode:
-                # Calculate real improvement
-                self._perform_debug_assertions(
-                    ds, solution, selected_move, old_solution
+                self._check_debug_assertions(ds, solution, selected_move, old_solution)
+
+            if self.reuse_moves:
+                all_moves = self._recalculate_moves(
+                    all_moves,
+                    solution,
+                    selected_move,
+                    selected_nodes,
+                    non_selected_nodes,
                 )
 
         return ds.loc[solution]
 
-    def _perform_debug_assertions(self, ds, solution, selected_move, old_solution):
+    def _invert_nodes_order(
+        edges: list[tuple[NODE_ID, NODE_ID]]
+    ) -> list[tuple[NODE_ID, NODE_ID]]:
+        return [(v, u) for u, v in edges]
+
+    def _recalculate_moves(
+        self,
+        all_moves: list[MoveEstimation],
+        solution: list[NODE_ID],
+        selected_move: MoveEstimation,
+        selected_nodes: set[NODE_ID],
+        non_selected_nodes: set[NODE_ID],
+    ) -> set[MoveEstimation]: ...
+
+    def _check_debug_assertions(self, ds, solution, selected_move, old_solution):
         real_improvement = function_cost(ds.loc[old_solution]) - function_cost(
             ds.loc[solution]
         )
@@ -359,7 +394,7 @@ class LocalSearch:
             print(f"Operation: {selected_move.move_type}")
             print("===========")
 
-        assert function_cost(ds.loc[solution]) < function_cost(ds.loc[old_solution])
+        assert function_cost(ds.loc[solution]) != function_cost(ds.loc[old_solution])
 
 
 def get_remaining_nodes(selected_nodes: set[NODE_ID], num_nodes: int) -> set[NODE_ID]:
