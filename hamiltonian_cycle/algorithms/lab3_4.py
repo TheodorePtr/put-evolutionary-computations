@@ -343,6 +343,17 @@ class LocalSearch:
             solution, selected_nodes, non_selected_nodes = self._update_solution(
                 solution, selected_move, selected_nodes, non_selected_nodes
             )
+            # assert selected_nodes.isdisjoint(
+            #     non_selected_nodes
+            # ), "Selected and non-selected sets overlap."
+            # assert selected_nodes.union(non_selected_nodes) == set(
+            #     range(len(dm))
+            # ), "Sets do not cover all nodes exactly."
+
+            # # Also, check that all nodes in `solution` are indeed in `selected_nodes`
+            # assert all(
+            #     node_id in selected_nodes for node_id in solution
+            # ), "Some solution nodes not in selected_nodes."
 
             if self.debug_mode:
                 self._check_debug_assertions(ds, solution, selected_move, old_solution)
