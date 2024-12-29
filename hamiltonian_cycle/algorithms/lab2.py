@@ -59,22 +59,34 @@ def init_greedy_2regret_cycle(
 
 
 def init_greedy_2regret_weighted_cycle(
-    ds: pd.DataFrame, dm: pd.DataFrame, start: int, w_cost: float, w_regret: float
+    ds: pd.DataFrame,
+    dm: pd.DataFrame,
+    start: int,
+    w_cost: float,
+    w_regret: float,
+    initial_solution: list = None,
 ) -> pd.Series:
     size = int(len(ds) * 0.5 + 0.5)
     num_nodes = len(ds)
 
     dm = dm.copy()
 
-    remaining_nodes = set(range(num_nodes))
-    remaining_nodes.remove(start)
-    solution = [start]
+    # Start with the provided initial solution or construct one
+    if initial_solution is None:
+        remaining_nodes = set(range(num_nodes))
+        remaining_nodes.remove(start)
+        solution = [start]
 
-    nearest_node = np.argmin(dm[start, list(remaining_nodes)])
-    nearest_node_idx = list(remaining_nodes)[nearest_node]
-    solution.append(nearest_node_idx)
-    remaining_nodes.remove(nearest_node_idx)
+        # Add the nearest node to start the solution
+        nearest_node = np.argmin(dm[start, list(remaining_nodes)])
+        nearest_node_idx = list(remaining_nodes)[nearest_node]
+        solution.append(nearest_node_idx)
+        remaining_nodes.remove(nearest_node_idx)
+    else:
+        solution = initial_solution.copy()
+        remaining_nodes = set(range(num_nodes)) - set(solution)
 
+    # Extend the solution until it reaches the desired size
     while len(solution) < size:
         best_combined_criterion = float("inf")
         best_node = None
@@ -113,6 +125,7 @@ def init_greedy_2regret_weighted_cycle(
                 best_node = node_idx
                 best_insertion = best_position
 
+        # Insert the best node at the best position
         solution.insert(best_insertion + 1, best_node)
         remaining_nodes.remove(best_node)
 
