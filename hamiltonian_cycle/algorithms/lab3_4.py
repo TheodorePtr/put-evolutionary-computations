@@ -173,8 +173,9 @@ class LocalSearch:
     def _select_greedy_best_move(
         self, all_neighbors: set[MoveEstimation]
     ) -> MoveEstimation:
-        random.shuffle(list(all_neighbors))
-        return all_neighbors[0]
+        all_neighbors_list = list(all_neighbors)
+        random.shuffle(all_neighbors_list)
+        return all_neighbors_list[0]
 
     def _browse_intra_moves(
         self,
